@@ -1,0 +1,16 @@
+{
+  "name": "gta-news-monitor",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node monitor.mjs",
+    "dry-run": "node monitor.mjs --dry-run",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@rowanmanning/feed-parser": "^2.1.5"
+  }
+}
