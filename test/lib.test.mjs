@@ -6,7 +6,9 @@ import {
     SEEN_LIMIT,
     addSeen,
     describeError,
-    feedItems,
+    deliver,
+    isPermanentTelegramError,
+    parseChatIds,
     formatAlert,
     formatPost,
     parseRockstarDate,
@@ -124,17 +126,33 @@ test('rockstarItems throws the graphql error message when data is null', () => {
     assert.throws(() => rockstarItems({}), /empty GraphQL response/);
 });
 
-test('feedItems keeps id, title, link, date and skips entries without a link', () => {
-    const published = new Date('2026-10-03T12:27:22Z');
-    const feed = {
-        items: [
-            { id: 'https://site/?p=1', title: 'Hello', url: 'https://site/hello', published },
-            { id: null, title: 'No id', url: 'https://site/no-id', published: null },
-            { id: 'x', title: 'No link', url: null, published },
-        ],
-    };
-    assert.deepEqual(feedItems(feed), [
-        { id: 'https://site/?p=1', title: 'Hello', link: 'https://site/hello', date: published },
-        { id: 'https://site/no-id', title: 'No id', link: 'https://site/no-id', date: null },
-    ]);
+test('parseChatIds splits a comma list, trims and drops blanks and repeats', () => {
+    assert.deepEqual(parseChatIds(' 8150577206, 42 ,,42,'), ['8150577206', '42']);
+    assert.deepEqual(parseChatIds(undefined), []);
+});
+
+test('telegram errors for a blocked bot or a missing chat are permanent, others are not', () => {
+    assert.equal(isPermanentTelegramError(403, 'Forbidden: bot was blocked by the user'), true);
+    assert.equal(isPermanentTelegramError(400, 'Bad Request: chat not found'), true);
+    assert.equal(isPermanentTelegramError(400, "Bad Request: can't parse entities"), false);
+    assert.equal(isPermanentTelegramError(502, 'Bad Gateway'), false);
+});
+
+test('deliver sends to every chat and skips one that blocked the bot', async () => {
+    const sent = [];
+    const skipped = await deliver('hi', ['a', 'b', 'c'], async (chat) => {
+        if (chat === 'b') throw Object.assign(new Error('blocked'), { permanent: true });
+        sent.push(chat);
+    });
+    assert.deepEqual(sent, ['a', 'c']);
+    assert.deepEqual(skipped, ['b']);
+});
+
+test('deliver stops on a temporary error so the post is retried next run', async () => {
+    await assert.rejects(
+        deliver('hi', ['a', 'b'], async (chat) => {
+            if (chat === 'a') throw new Error('Bad Gateway');
+        }),
+        /Bad Gateway/,
+    );
 });

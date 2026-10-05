@@ -84,9 +84,67 @@ export function rockstarItems(json) {
     return posts.map((p) => ({ id: p.id, title: p.title, link: `${ROCKSTAR}${p.url}`, date: parseRockstarDate(p.created) }));
 }
 
-// feed: the result of parseFeed() from @rowanmanning/feed-parser
-export function feedItems(feed) {
-    return feed.items
-        .filter((i) => i.url)
-        .map((i) => ({ id: i.id ?? i.url, title: i.title ?? i.url, link: i.url, date: i.published ?? null }));
+// A full XML parser costs ~14 ms of CPU on a cold start for these three feeds, over the 10 ms
+// a free Cloudflare Worker gets. Only four short fields per item are needed, so pull them out
+// with regexes and skip the article bodies entirely.
+const ITEM = /<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/g;
+const BODIES = /<(description|content:encoded)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g; // may contain <link>, <title>
+const FIELD = Object.fromEntries(['title', 'link', 'guid', 'pubDate'].map((name) => [name, new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`)]));
+const CDATA = /^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/;
+const ENTITY = /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi;
+const NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', hellip: '…', ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”' };
+
+function decodeEntities(text) {
+    return text.replace(ENTITY, (match, name) => {
+        if (name[0] !== '#') return NAMED[name.toLowerCase()] ?? match;
+        const code = name[1] === 'x' || name[1] === 'X' ? parseInt(name.slice(2), 16) : Number(name.slice(1));
+        return String.fromCodePoint(code);
+    });
+}
+
+function field(block, name) {
+    const raw = block.match(FIELD[name])?.[1];
+    if (raw === undefined) return '';
+    return decodeEntities(raw.match(CDATA)?.[1] ?? raw).trim();
+}
+
+export function rssItems(xml) {
+    const items = [];
+    for (const [, block] of xml.matchAll(ITEM)) {
+        const head = block.replace(BODIES, '');
+        const link = field(head, 'link');
+        if (!link) continue;
+        const date = new Date(field(head, 'pubDate'));
+        items.push({
+            id: field(head, 'guid') || link,
+            title: field(head, 'title') || link,
+            link,
+            date: Number.isNaN(date.getTime()) ? null : date,
+        });
+    }
+    return items;
+}
+
+// TELEGRAM_CHAT_ID may hold several ids: "8150577206,123456789"
+export function parseChatIds(value) {
+    return [...new Set(String(value ?? '').split(',').map((id) => id.trim()).filter(Boolean))];
+}
+
+// the user blocked the bot or the chat is gone: retrying will never help, so skip that chat
+export function isPermanentTelegramError(status, description) {
+    return status === 403 || (status === 400 && /chat not found/i.test(description));
+}
+
+// sendOne(chatId, text) throws an error with `permanent: true` for a chat that can never be reached
+export async function deliver(text, chatIds, sendOne) {
+    const skipped = [];
+    for (const chatId of chatIds) {
+        try {
+            await sendOne(chatId, text);
+        } catch (error) {
+            if (!error.permanent) throw error;
+            skipped.push(chatId);
+        }
+    }
+    return skipped;
 }

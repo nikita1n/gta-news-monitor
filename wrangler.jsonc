@@ -1,0 +1,19 @@
+{
+    "$schema": "./node_modules/wrangler/config-schema.json",
+    "name": "gta-news-monitor",
+    "main": "worker.mjs",
+    "compatibility_date": "2026-10-01",
+    "compatibility_flags": ["nodejs_compat"],
+    // no http endpoint: the worker only runs on the schedule below
+    "workers_dev": false,
+    "triggers": {
+        "crons": ["*/15 * * * *"]
+    },
+    "kv_namespaces": [
+        { "binding": "STATE", "id": "1f9e64f93ffb408da054659a6bfc1c03" }
+    ],
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+    }
+}
